@@ -1,6 +1,6 @@
 # DAMMT
 
-## 🚀 Khởi chạy hệ thống
+## Khởi chạy hệ thống
 
 Chạy các lệnh sau tại thư mục chứa file `docker-compose.yml`.
 
