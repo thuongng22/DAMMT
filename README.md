@@ -76,7 +76,7 @@ Gửi nhiều request liên tiếp đến reverse proxy để kiểm tra cơ ch�
 
 ### 3.2. Kiểm tra kết quả
 
-# 4.  
+## 4.Đo Dung Lượng Quota 
 
 Quan sát HTTP status code trả về từ các request.
 
