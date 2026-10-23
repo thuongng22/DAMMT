@@ -1,0 +1,44 @@
+version: '3.8'
+
+services:
+  traefik:
+    image: traefik:v3.2
+    command:
+      - "--api.insecure=true"
+      - "--providers.docker=true"
+      - "--entrypoints.web.address=:80"
+      # kích hoạt tính năng nạp plugin nội bộ (localPlugins). 
+      # đặt tên biến là 'ratelimit' và trỏ đúng vào đường dẫn import đã khai báo ở .traefik.yml
+      - "--experimental.localPlugins.ratelimit.moduleName=github.com/thuongng22/DAMMT/module5-plugin"
+    ports:
+      - "80:80"     # Cổng nhận request từ người dùng
+      - "8080:8080" # Cổng giao diện quản lý (Dashboard)
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+     # Mang thư mục ./module5-plugin từ máy Linux nhét thẳng vào thư mục /plugins-local/src/... bên trong máy ảo Traefik để nó đọc được code Go.
+      - ./module5-plugin:/plugins-local/src/github.com/thuongng22/DAMMT/module5-plugin
+  redis:
+    image: redis:alpine
+    ports:
+      - "6379:6379"
+
+  # Dịch vụ ảo để test định tuyến của Module 1
+  app_test:
+    image: traefik/whoami
+    labels:
+      - "traefik.enable=true"
+      # Module 1 nhận biết request dựa trên Host Header hoặc Path Prefix
+      - "traefik.http.routers.my-app.rule=Host(`test.local`)" 
+      - "traefik.http.services.my-app.loadbalancer.server.port=80"
+      # Khai báo ép request chạy qua code Go 
+      - "traefik.http.routers.my-app.middlewares=my-plugin"
+      - "traefik.http.middlewares.my-plugin.plugin.ratelimit.maxreq=10"
+
+# GIẢ LẬP MODULE 3 (Cấp API đọc rules cấu hình)
+  mock_module3:
+    image: nginx:alpine
+    ports:
+      - "8001:80" 
+    volumes:
+      # Ánh xạ thư mục chứa rules.json vào web server
+      - ./mock-config:/usr/share/nginx/html

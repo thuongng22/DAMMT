@@ -1,0 +1,5 @@
+displayName: Rate Limit Plugin
+type: middleware
+import: github.com/thuongng22/DAMMT/module5-plugin
+summary: Module 5 Rate Limiter
+testData: {}

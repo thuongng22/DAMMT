@@ -1,0 +1,24 @@
+{
+  "rate_limits": [
+    {
+      "endpoint": "/api",
+      "limit_requests": 10,
+      "time_window_seconds": 1
+    },
+    {
+      "endpoint": "/static",
+      "limit_requests": 100,
+      "time_window_seconds": 1
+    }
+  ],
+  "quotas": [
+    {
+      "user_id": "vip_user_1",
+      "max_bandwidth_mb": 1024
+    },
+    {
+      "user_id": "normal_user",
+      "max_bandwidth_mb": 50
+    }
+  ]
+}
