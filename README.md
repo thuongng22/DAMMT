@@ -72,9 +72,90 @@ curl http://localhost:8001/rules.json
 
 Gửi nhiều request liên tiếp đến reverse proxy để kiểm tra cơ chế giới hạn tốc độ truy cập.
 
+Trước tiên, khởi chạy các service tại thư mục gốc của project:
 
+```bash
+docker compose up -d
+```
 
-### 3.2. Kiểm tra kết quả
+Kiểm tra trạng thái các service:
+
+```bash
+docker compose ps
+```
+
+Gửi một request thử nghiệm đến backend thông qua Traefik:
+
+```bash
+curl -i -H "Host: test.local" http://localhost:8088/
+```
+
+Nếu hệ thống hoạt động bình thường, response sẽ có mã HTTP `200 OK`.
+
+Tiếp theo, gửi nhiều request liên tiếp đến endpoint `/api`:
+
+```bash
+for i in $(seq 1 15); do
+  printf "Request %02d: " "$i"
+  curl -s -o /dev/null -w "%{http_code}\n" \
+    -H "Host: test.local" \
+    "http://localhost:8088/api"
+done
+```
+
+Theo cấu hình hiện tại trong `mock-config/rules.json`, endpoint `/api` có giới hạn 10 request/giây.
+
+Khi vượt quá số token hiện có, middleware sẽ trả về HTTP `429 Too Many Requests`. Các request được phép tiếp tục đến backend sẽ nhận response HTTP `200 OK`.
+
+**Lưu ý:** Rate limiter sử dụng thuật toán Token Bucket, trong đó token được nạp lại theo thời gian. Vì vậy, kết quả thực tế không nhất thiết luôn là chính xác 10 response `200` rồi 5 response `429` trong mỗi lần chạy.
+
+### 3.2. Kiểm tra giới hạn trên endpoint `/static`
+
+Endpoint `/static` được cấu hình giới hạn 100 request/giây. Có thể gửi nhiều request đồng thời để kiểm tra:
+
+```bash
+time seq 1 300 | xargs -P 120 -I {} \
+  curl -s -o /dev/null -w '%{http_code}\n' \
+  -H 'Host: test.local' \
+  'http://localhost:8088/static' \
+  | sort | uniq -c
+```
+
+Kết quả sẽ thống kê số lượng response theo từng mã HTTP. HTTP `429` cho biết một số request đã bị rate limiter từ chối.
+
+Số lượng response `200` và `429` có thể thay đổi tùy thời gian thực thi và tốc độ nạp lại token.
+
+### 3.3. Kiểm tra middleware trên Traefik
+
+Có thể kiểm tra middleware đã được Traefik nạp hay chưa bằng lệnh:
+
+```bash
+curl -s http://localhost:8080/api/http/middlewares
+```
+
+Tìm middleware `my-plugin@docker` và xác nhận trạng thái là `enabled`, loại middleware là `ratelimit`.
+
+Nếu middleware không hoạt động như mong đợi, kiểm tra log của Traefik:
+
+```bash
+docker compose logs --tail=100 traefik
+```
+
+### 3.4. Chạy kiểm thử bằng Go
+
+Để kiểm tra logic khớp đường dẫn và thuật toán Token Bucket với Redis, chạy:
+
+```bash
+cd module5-plugin
+go test -v ./...
+```
+
+Các test hiện có bao gồm:
+
+- `TestMatchRule`: kiểm tra các trường hợp khớp và không khớp đường dẫn.
+- `TestTokenBucketWithRedis`: kiểm tra khả năng cho phép request, từ chối khi bucket cạn và cho phép request sau khi token được nạp lại.
+
+Lưu ý rằng test tích hợp Redis yêu cầu Redis đang chạy và có thể truy cập qua `127.0.0.1:6379`. Nếu Redis không khả dụng, test này sẽ bị bỏ qua (skip).
 
 ## 4.Đo Dung Lượng Quota 
 
