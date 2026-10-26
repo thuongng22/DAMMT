@@ -11,10 +11,10 @@ services:
       # đặt tên biến là 'ratelimit' và trỏ đúng vào đường dẫn import đã khai báo ở .traefik.yml
       - "--experimental.localPlugins.ratelimit.moduleName=github.com/thuongng22/DAMMT/module5-plugin"
     ports:
-      - "80:80"     # Cổng nhận request từ người dùng
+      - "8088:80"     # Cổng nhận request từ người dùng
       - "8080:8080" # Cổng giao diện quản lý (Dashboard)
     volumes:
-      - /var/run/docker.sock:/var/run/docker.sock
+      - /run/user/1000/podman/podman.sock:/var/run/docker.sock
      # Mang thư mục ./module5-plugin từ máy Linux nhét thẳng vào thư mục /plugins-local/src/... bên trong máy ảo Traefik để nó đọc được code Go.
       - ./module5-plugin:/plugins-local/src/github.com/thuongng22/DAMMT/module5-plugin
   redis:
@@ -33,7 +33,8 @@ services:
       # Khai báo ép request chạy qua code Go 
       - "traefik.http.routers.my-app.middlewares=my-plugin"
       - "traefik.http.middlewares.my-plugin.plugin.ratelimit.maxreq=10"
-
+      - "traefik.http.middlewares.my-plugin.plugin.ratelimit.redisaddr=redis:6379"
+      - "traefik.http.middlewares.my-plugin.plugin.ratelimit.rulesurl=http://mock_module3/rules.json"
 # GIẢ LẬP MODULE 3 (Cấp API đọc rules cấu hình)
   mock_module3:
     image: nginx:alpine
