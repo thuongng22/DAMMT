@@ -157,19 +157,117 @@ Các test hiện có bao gồm:
 
 Lưu ý rằng test tích hợp Redis yêu cầu Redis đang chạy và có thể truy cập qua `127.0.0.1:6379`. Nếu Redis không khả dụng, test này sẽ bị bỏ qua (skip).
 
-## 4.Đo Dung Lượng Quota 
+## 4. Kiểm tra Quản lý Dung lượng (Quota Management)
 
-Quan sát HTTP status code trả về từ các request.
+Tính năng Quản lý Quota chịu trách nhiệm theo dõi và giới hạn tổng băng thông (bao gồm cả dung lượng Upload và Download) mà một người dùng được phép sử dụng trong một chu kỳ nhất định (Ví dụ: 50MB/ngày). Hệ thống sử dụng Redis để lưu trữ và cộng dồn số Byte đã tiêu thụ một cách bền vững.
 
-- `2xx`: Request được xử lý thành công.
-- `429 Too Many Requests`: Request bị từ chối do vượt giới hạn, nếu hệ thống được cấu hình trả về mã này.
-- `5xx`: Có thể xảy ra lỗi tại proxy hoặc service phía sau; cần kiểm tra log để xác định nguyên nhân.
+### 4.1. Kiểm tra ghi nhận dung lượng cơ bản
 
-> **Lưu ý:** Kết quả phụ thuộc vào cấu hình Rate Limiter, ngưỡng giới hạn và khoảng thời gian áp dụng. Nếu hệ thống sử dụng cơ chế phản hồi khác, hãy đối chiếu với cấu hình thực tế.
+Gửi một request thông thường qua Proxy với định danh `normal_user` (Theo cấu hình, user này bị giới hạn 50MB/ngày):
+
+```bash
+curl -i -H "Host: test.local" -H "X-User-ID: normal_user" http://localhost:8088/
+```
+
+Truy cập vào cơ sở dữ liệu Redis để kiểm tra xem hệ thống đã ghi nhận mức tiêu thụ băng thông của request vừa rồi hay chưa:
+
+```bash
+sudo docker compose exec redis redis-cli GET module5:quota:normal_user
+```
+
+**Giải thích lệnh và kết quả:**
+- **Lệnh `GET [key]`:** Yêu cầu Redis trả về giá trị đang được lưu trữ của một khóa cụ thể. Ở đây khóa là `module5:quota:normal_user`.
+- **Kết quả trả về (Ví dụ: `"373"`):** Con số này đại diện cho tổng số Byte mà `normal_user` đã tiêu thụ. Khi có luồng mạng đi qua, Plugin Go đã tự động đo lường kích thước gói tin (dựa trên `Content-Length`) và cộng dồn vào Redis. Số 373 nghĩa là request vừa rồi tiêu tốn 373 Bytes trong quỹ 50MB của người dùng.
+
+### 4.2. Kiểm tra chu kỳ tự động Reset (Reset Period)
+
+Hệ thống được thiết kế để tự động làm mới Quota (xóa dữ liệu tiêu thụ về 0) sau một khoảng thời gian (Daily, Weekly, Monthly). Để kiểm tra tính năng đếm ngược này, sử dụng lệnh:
+
+```bash
+sudo docker compose exec redis redis-cli TTL module5:quota:normal_user
+```
+
+**Giải thích lệnh và kết quả:**
+- **Lệnh `TTL [key]` (Time To Live):** Yêu cầu Redis cho biết thời gian đếm ngược còn lại (tính bằng giây) trước khi khóa dữ liệu này bị tự động xóa.
+- **Kết quả trả về (Ví dụ: `86395`):** Con số này cho biết còn 86395 giây nữa (khoảng gần 24 giờ) thì Quota của user này sẽ bị xóa. Điều này chứng minh hệ thống đã đọc đúng cấu hình `"reset_period": "daily"` từ Nhóm 3 và thiết lập thời gian tự hủy chính xác là 86400 giây.
+
+### 4.3. Kiểm thử kịch bản vượt quá giới hạn (Quota Exceeded)
+
+Để kiểm chứng hệ thống có chặn luồng dữ liệu khi hết Quota hay không, ta sẽ tạo một file dữ liệu ảo vượt quá mức cho phép (50MB) và ép người dùng tải lên.
+
+**Bước 1: Tạo file payload nhị phân 51MB để test**
+
+```bash
+dd if=/dev/zero of=test_payload.dat bs=1M count=51
+```
+*(Lệnh này tạo ra một file giả chứa toàn bộ byte 0 với dung lượng chuẩn 51 Megabytes).*
+
+**Bước 2: Giả lập người dùng Upload file lên server**
+
+Sử dụng cờ `-o /dev/null` để đẩy luồng phản hồi nhị phân vào "thùng rác" của Linux, tránh làm treo giao diện Terminal:
+
+```bash
+curl -s -o /dev/null -w "HTTP Status: %{http_code}\n" \
+     -H "Host: test.local" \
+     -H "X-User-ID: normal_user" \
+     --data-binary @test_payload.dat \
+     http://localhost:8088/
+```
+
+**Bước 3: Xác minh dữ liệu bị trừ trong Redis**
+
+Tiếp tục dùng lệnh kiểm tra dung lượng hiện tại trong kho lưu trữ:
+
+```bash
+sudo docker compose exec redis redis-cli GET module5:quota:normal_user
+```
+
+**Kết quả trả về (Ví dụ: `"106957234"`):** Con số khổng lồ này phản ánh chính xác thuật toán đo đếm 2 chiều. Nó bao gồm ~51MB dung lượng Upload (Client đẩy lên) cộng với ~51MB dung lượng Download (Web Server vọng/echo trả lại kết quả), tổng cộng rơi vào khoảng ~106 triệu Bytes.
+
+**Bước 4: Xác nhận hệ thống khóa truy cập**
+
+Lúc này, quỹ dung lượng của `normal_user` đã vượt quá 50MB (tương đương 52.428.800 Bytes). Bất kỳ request nào tiếp theo cũng sẽ bị chặn lại:
+
+```bash
+curl -i -H "Host: test.local" -H "X-User-ID: normal_user" http://localhost:8088/
+```
+
+**Kết quả mong đợi:** Traefik sẽ từ chối chuyển tiếp request đến backend và trả về lỗi phản hồi ngay tại gateway:
+- **Mã HTTP Status:** `429 Too Many Requests`
+- **Body Response:** `{"error": "Quota Exceeded (Vuot dung luong cho phep)"}`
+
+### 4.4. Giám sát băng thông đã dùng và tính toán dung lượng còn lại
+
+Vì hệ thống lưu trữ thông số giới hạn (Max Quota) trên RAM của ứng dụng và chỉ lưu mức tiêu thụ (Used Quota) vào cơ sở dữ liệu, ta cần tra cứu số liệu đã dùng trên Redis để đối chiếu hoặc tính toán.
+
+**Lệnh tra cứu số Byte đã xài của một User:**
+
+```bash
+sudo docker compose exec redis redis-cli GET module5:quota:normal_user
+```
+*(Nếu kết quả trả về `nil`, nghĩa là người dùng này chưa truy cập lần nào trong chu kỳ hiện tại).*
+
+**Lệnh nâng cao: Tự động tính toán dung lượng còn lại (Remaining Bandwidth)**
+
+Có thể sử dụng đoạn mã Bash dưới đây để tự động hóa việc lấy dữ liệu từ Redis và tính toán băng thông còn lại (Ví dụ áp dụng cho `normal_user` với quỹ 50MB tương đương 52.428.800 Bytes):
+
+```bash
+USED=$(sudo docker compose exec -T redis redis-cli GET module5:quota:normal_user | tr -d '\r'); \
+USED=${USED:-0}; \
+if [ "$USED" = "nil" ]; then USED=0; fi; \
+MAX=52428800; \
+REMAINING=$((MAX - USED)); \
+echo "Đã dùng: $USED Bytes"; \
+echo "Còn lại: $REMAINING Bytes"
+```
+
+**Giải thích kết quả:**
+- **Đã dùng (Used):** Tổng số Byte của các request/response đã đi lọt qua Proxy trong chu kỳ hiện tại.
+- **Còn lại (Remaining):** Số Byte tối đa người dùng được phép tiêu thụ tiếp. Nếu con số này <= 0, hệ thống sẽ bắt đầu kích hoạt khóa tự động (`HTTP 429 - Quota Exceeded`).
 
 ---
 
-## 4. Kiểm tra trạng thái hệ thống
+## 5. Kiểm tra trạng thái hệ thống
 
 ### Xem trạng thái các container
 
@@ -191,19 +289,19 @@ sudo docker logs -f dammt-traefik-1
 
 ---
 
-## 5. Troubleshooting
+## 6. Troubleshooting
 
 | Vấn đề | Hướng kiểm tra |
 |---|---|
 | Không truy cập được `localhost` | Kiểm tra container, port mapping và trạng thái service |
 | Traefik không định tuyến request | Kiểm tra header `Host`, router rules và log Traefik |
 | Không truy cập được Rules API | Kiểm tra service Module 3 và port `8001` |
-| Rate Limiter không hoạt động như mong đợi | Kiểm tra middleware, ngưỡng giới hạn và cấu hình áp dụng |
+| Rate Limiter / Quota không hoạt động như mong đợi | Kiểm tra middleware, ngưỡng giới hạn và cấu hình áp dụng |
 | Container không khởi chạy | Chạy `sudo docker compose logs` để xem lỗi |
 
 ---
 
-## 6. Quy trình kiểm thử tổng quát
+## 7. Quy trình kiểm thử tổng quát
 
 1. Khởi chạy các service bằng Docker Compose.
 2. Kiểm tra trạng thái container.
@@ -211,5 +309,7 @@ sudo docker logs -f dammt-traefik-1
 4. Kiểm tra Module 3 bằng header `X-User-ID`.
 5. Kiểm tra Rules API tại `/rules.json`.
 6. Gửi nhiều request để kiểm tra Rate Limiter.
-7. Đối chiếu HTTP status code và log để xác nhận kết quả.
+7. Kiểm tra Quản lý Dung lượng (Quota Management).
+8. Đối chiếu HTTP status code và log để xác nhận kết quả.
+
 

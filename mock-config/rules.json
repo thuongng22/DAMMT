@@ -14,11 +14,13 @@
   "quotas": [
     {
       "user_id": "vip_user_1",
-      "max_bandwidth_mb": 1024
+      "max_bandwidth_mb": 1024,
+      "reset_period": "monthly"
     },
     {
       "user_id": "normal_user",
-      "max_bandwidth_mb": 50
+      "max_bandwidth_mb": 50,
+      "reset_period": "daily"
     }
   ]
 }

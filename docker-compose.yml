@@ -14,7 +14,8 @@ services:
       - "8088:80"     # Cổng nhận request từ người dùng
       - "8080:8080" # Cổng giao diện quản lý (Dashboard)
     volumes:
-      - /run/user/1000/podman/podman.sock:/var/run/docker.sock
+     # - /run/user/1000/podman/podman.sock:/var/run/docker.sock
+      - /var/run/docker.sock:/var/run/docker.sock
      # Mang thư mục ./module5-plugin từ máy Linux nhét thẳng vào thư mục /plugins-local/src/... bên trong máy ảo Traefik để nó đọc được code Go.
       - ./module5-plugin:/plugins-local/src/github.com/thuongng22/DAMMT/module5-plugin
   redis:
